@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-payment
+  labels:
+    name: mongo-payment
+spec:
+  ports:
+  - port: 27017
+    targetPort: 27017
+  clusterIP: None
+  selector:
+    role: mongo-payment
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: mongo-payment
+spec:
+  serviceName: "mongo-payment"
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        role: mongo-payment
+        environment: production
+        replicaset: rs0
+    spec:
+      affinity:
+        # This is to prevent mongodb replicas from ending up on the same
+        # host machine
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: replicaset
+                  operator: In
+                  values:
+                  - rs0
+              topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: mongo-payment
+          image: mongo
+          command:
+            - "numactl"
+            - "--interleave=all"
+            - mongod
+            - "--wiredTigerCacheSizeGB"
+            - "0.25"
+            - "--replSet"
+            - rs0
+            - "--bind_ip"
+            - 0.0.0.0
+            - "--smallfiles"
+            - "--noprealloc"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+          ports:
+            - containerPort: 27017
+          volumeMounts:
+            - name: secrets-volume
+              readOnly: true
+              mountPath: /etc/secrets-volume
+            - name: mongo-payment-db-data
+              mountPath: /data/db
+        - name: mongo-helper
+          image: cvallance/mongo-k8s-sidecar
+          env:
+            - name: MONGO_SIDECAR_POD_LABELS
+              value: "role=mongo-payment,environment=production"
+            - name: MONGO_PORT
+              value: "27017"
+            - name: KUBERNETES_MONGO_SERVICE_NAME
+              value: "mongo-payment"
+            - name: KUBE_NAMESPACE
+              value: "atlas"
+  volumeClaimTemplates:
+  - metadata:
+      name: mongo-payment-db-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 2Gi
